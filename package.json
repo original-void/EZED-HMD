@@ -1,13 +1,15 @@
 {
-  "name": "ezed-hmd",
+  "name": "ezed-xmd",
   "version": "1.0.0",
-  "main": "connection.js",
+  "description": "EZED XMD WhatsApp Bot",
+  "main": "index.js",
   "scripts": {
-    "start": "node connection.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.8",
-    "pino": "^8.0.0",
-    "qrcode-terminal": "^0.12.0"
+    "@whiskeysockets/baileys": "^6.7.5",
+    "express": "^4.19.2",
+    "pino": "^9.3.2",
+    "qrcode": "^1.5.4"
   }
 }
