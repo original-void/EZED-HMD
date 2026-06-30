@@ -1,3 +1,4 @@
+const { checkGroupPermissions } = require("../lib/permissions");
 module.exports = {
     name: "add",
 
