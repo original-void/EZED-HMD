@@ -1,0 +1,13 @@
+{
+  "name": "ezed-hmd",
+  "version": "1.0.0",
+  "main": "connection.js",
+  "scripts": {
+    "start": "node connection.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.8",
+    "pino": "^8.0.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
