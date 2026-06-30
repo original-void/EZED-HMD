@@ -19,7 +19,56 @@ const { saveMessage, getMessage } = require("./lib/messageStore");
 const { saveViewOnce } = require("./lib/viewOnceStore");
 
 // =======================
-// LOAD PLUGINS
+// GLOBALS
+// =======================
+
+let qrImage = "";
+let autoViewStatus = true;
+
+const startTime = Date.now();
+
+function runtime() {
+    const sec = Math.floor((Date.now() - startTime) / 1000);
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    return `${h}h ${m}m ${s}s`;
+}
+
+// =======================
+// EXPRESS SERVER
+// =======================
+
+const app = express();
+
+app.get("/", (req, res) => {
+
+    if (!qrImage) {
+        return res.send(`
+        <center>
+            <h1>${config.BOT_NAME}</h1>
+            <h3>Waiting For QR Code...</h3>
+        </center>
+        `);
+    }
+
+    res.send(`
+    <center>
+        <h1>${config.BOT_NAME}</h1>
+        <img src="${qrImage}" width="300"/>
+        <h3>Scan Using WhatsApp Linked Devices</h3>
+    </center>
+    `);
+});
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+    console.log(`Web Server Running On Port ${PORT}`);
+});
+
+// =======================
+// PLUGINS
 // =======================
 
 const plugins = new Map();
@@ -49,82 +98,22 @@ function loadPlugins() {
             const plugin = require(filePath);
 
             if (!plugin.name || typeof plugin.execute !== "function") {
-
                 console.log(`Invalid Plugin: ${file}`);
                 continue;
-
             }
 
             plugins.set(plugin.name.toLowerCase(), plugin);
 
         } catch (err) {
-
             console.log(`Failed loading ${file}`);
             console.error(err);
-
         }
-
     }
 
     console.log(`Loaded ${plugins.size} plugins.`);
-
 }
 
 loadPlugins();
-
-// =======================
-// EXPRESS SERVER
-// =======================
-
-const app = express();
-
-let qrImage = "";
-
-const startTime = Date.now();
-
-function runtime() {
-
-    const sec = Math.floor((Date.now() - startTime) / 1000);
-
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const s = sec % 60;
-
-    return `${h}h ${m}m ${s}s`;
-
-}
-
-app.get("/", (req, res) => {
-
-    if (!qrImage) {
-
-        return res.send(`
-        <center>
-            <h1>${config.BOT_NAME}</h1>
-            <h3>Waiting For QR Code...</h3>
-        </center>
-        `);
-
-    }
-
-    res.send(`
-    <center>
-        <h1>${config.BOT_NAME}</h1>
-        <img src="${qrImage}" width="300">
-        <br><br>
-        <h3>Scan Using WhatsApp Linked Devices</h3>
-    </center>
-    `);
-
-});
-
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-
-    console.log(`Web Server Running On Port ${PORT}`);
-
-});
 
 // =======================
 // START BOT
@@ -141,58 +130,41 @@ async function startBot() {
     const sock = makeWASocket({
 
         version,
-
         auth: state,
-
-        logger: P({
-            level: "silent"
-        }),
-
-        printQRInTerminal: true
+        logger: P({ level: "silent" }),
+        printQRInTerminal: true,
+        markOnlineOnConnect: true
 
     });
 
     sock.ev.on("creds.update", saveCreds);
 
-    sock.ev.on("connection.update", async ({
-        connection,
-        qr,
-        lastDisconnect
-    }) => {
+    sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
 
         if (qr) {
-
             qrImage = await QRCode.toDataURL(qr);
-
             console.log("QR Generated");
-
         }
 
         if (connection === "open") {
-
             console.log(`${config.BOT_NAME} Connected Successfully`);
-
         }
 
         if (connection === "close") {
 
             const shouldReconnect =
-                lastDisconnect?.error?.output?.statusCode !==
-                DisconnectReason.loggedOut;
+                lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
 
             console.log("Connection Closed");
 
             if (shouldReconnect) {
-
                 console.log("Reconnecting...");
-
                 startBot();
-
             }
-
         }
+    });
 
-    });    // =======================
+    // =======================
     // MESSAGE HANDLER
     // =======================
 
@@ -203,12 +175,20 @@ async function startBot() {
 
         if (!msg?.message) return;
 
-        if (msg.key.remoteJid === "status@broadcast") return;
-
         const from = msg.key.remoteJid;
 
-        // Save message for AntiDelete
-        saveMessage(msg);
+        // =======================
+        // AUTO VIEW STATUS FIX
+        // =======================
+
+        if (autoViewStatus && from === "status@broadcast") {
+            try {
+                await sock.readMessages([msg.key]);
+                console.log("👁️ Status viewed:", msg.key.participant || "unknown");
+            } catch (err) {
+                console.log("AutoViewStatus Error:", err.message);
+            }
+        }
 
         const body =
             msg.message.conversation ||
@@ -217,10 +197,31 @@ async function startBot() {
             msg.message.videoMessage?.caption ||
             "";
 
+        // =======================
+        // COMMANDS (AUTO VIEW TOGGLE)
+        // =======================
+
+        if (body === `${config.PREFIX}autoviewstatus on`) {
+            autoViewStatus = true;
+            return sock.sendMessage(from, {
+                text: "✅ Auto View Status ENABLED"
+            });
+        }
+
+        if (body === `${config.PREFIX}autoviewstatus off`) {
+            autoViewStatus = false;
+            return sock.sendMessage(from, {
+                text: "❌ Auto View Status DISABLED"
+            });
+        }
+
+        // Save message
+        saveMessage(msg);
+
         const db = loadDB();
 
         // =======================
-        // CACHE VIEW ONCE
+        // VIEW ONCE CACHE
         // =======================
 
         try {
@@ -245,8 +246,7 @@ async function startBot() {
 
                 if (media) {
 
-                    const stream =
-                        await downloadContentFromMessage(media, type);
+                    const stream = await downloadContentFromMessage(media, type);
 
                     let buffer = Buffer.alloc(0);
 
@@ -261,20 +261,16 @@ async function startBot() {
                         caption: media.caption || ""
                     });
 
-                    console.log("👁️ View Once Cached");
-
+                    console.log("👁️ ViewOnce Cached");
                 }
-
             }
 
         } catch (err) {
-
             console.log("ViewOnce Error:", err.message);
-
         }
 
         // =======================
-        // ANTILINK
+        // ANTI LINK (BASIC)
         // =======================
 
         if (
@@ -289,26 +285,14 @@ async function startBot() {
 
             if (hasLink) {
 
-                try {
+                await sock.sendMessage(from, { delete: msg.key });
 
-                    await sock.sendMessage(from, {
-                        delete: msg.key
-                    });
-
-                    await sock.sendMessage(from, {
-                        text: "🚫 Links are not allowed in this group."
-                    });
-
-                } catch (err) {
-
-                    console.log(err);
-
-                }
+                await sock.sendMessage(from, {
+                    text: "🚫 Links are not allowed in this group."
+                });
 
                 return;
-
             }
-
         }
 
         // =======================
@@ -327,42 +311,34 @@ async function startBot() {
         const plugin = plugins.get(command);
 
         if (!plugin) {
-
-            return await sock.sendMessage(from, {
-                text: `❌ Unknown command: ${command}\n\nUse ${config.PREFIX}menu to view all commands.`
+            return sock.sendMessage(from, {
+                text: `❌ Unknown command: ${command}\n\nUse ${config.PREFIX}menu`
             });
-
         }
-
-        console.log(`[COMMAND] ${command} | ${from}`);
 
         try {
 
-    await plugin.execute({
-        sock,
-        msg,
-        from,
-        body,
-        args,
-        config,
-        runtime
-    });
+            await plugin.execute({
+                sock,
+                msg,
+                from,
+                body,
+                args,
+                config,
+                runtime
+            });
 
-    console.log(`✅ ${command} executed successfully.`);
+        } catch (err) {
 
-} catch (err) {
+            console.error("Plugin Error:", err);
 
-    console.error(`Plugin Error (${command})`);
-    console.error(err);
-
-    await sock.sendMessage(from,{
-        text:
-`❌ An error occurred while running *${command}*.`
-    });
-
+            await sock.sendMessage(from, {
+                text: `❌ Error running ${command}`
+            });
         }
+    });
 
-    });    // =======================
+    // =======================
     // ANTI DELETE
     // =======================
 
@@ -376,14 +352,9 @@ async function startBot() {
 
             if (!db.groups?.[chat]?.antidelete) continue;
 
-            // Ignore non-delete updates
-            if (
-                update.update?.message !== undefined &&
-                update.update?.message !== null
-            ) continue;
+            if (update.update?.message) continue;
 
             const old = getMessage(update.key.id);
-
             if (!old) continue;
 
             try {
@@ -391,236 +362,44 @@ async function startBot() {
                 const sender =
                     old.pushName ||
                     old.key.participant ||
-                    old.key.remoteJid ||
                     "Unknown";
 
-                const time = new Date(
-                    Number(old.messageTimestamp || Math.floor(Date.now() / 1000)) * 1000
-                ).toLocaleString();
-
                 const header =
-`🚨 *ANTI DELETE DETECTED*
+`🚨 ANTI DELETE DETECTED
 
-👤 Sender : ${sender}
-🕒 Time   : ${time}
-
-♻️ Recovered by ${config.BOT_NAME}`;
-
-                // =======================
-                // TEXT
-                // =======================
+👤 Sender: ${sender}
+🤖 Bot: ${config.BOT_NAME}`;
 
                 if (old.message.conversation) {
-
                     await sock.sendMessage(chat, {
-                        text: `${header}\n\n💬 ${old.message.conversation}`
+                        text: `${header}\n\n${old.message.conversation}`
                     });
-
-                    continue;
-
-                }
-
-                if (old.message.extendedTextMessage) {
-
-                    await sock.sendMessage(chat, {
-                        text: `${header}\n\n💬 ${old.message.extendedTextMessage.text}`
-                    });
-
-                    continue;
-
-                }
-
-                // =======================
-                // IMAGE
-                // =======================
-
-                if (old.message.imageMessage) {
-
-                    const buffer = await sock.downloadMediaMessage(old);
-
-                    await sock.sendMessage(chat, {
-                        image: buffer,
-                        caption: header
-                    });
-
-                    continue;
-
-                }
-
-                // =======================
-                // VIDEO
-                // =======================
-
-                if (old.message.videoMessage) {
-
-                    const buffer = await sock.downloadMediaMessage(old);
-
-                    await sock.sendMessage(chat, {
-                        video: buffer,
-                        caption: header
-                    });
-
-                    continue;
-
-                }
-
-                // =======================
-                // AUDIO / VOICE NOTE
-                // =======================
-
-                if (old.message.audioMessage) {
-
-                    const buffer = await sock.downloadMediaMessage(old);
-
-                    await sock.sendMessage(chat, {
-                        audio: buffer,
-                        mimetype: old.message.audioMessage.mimetype,
-                        ptt: old.message.audioMessage.ptt || false
-                    });
-
-                    continue;
-
-                }
-
-                // =======================
-                // STICKER
-                // =======================
-
-                if (old.message.stickerMessage) {
-
-                    const buffer = await sock.downloadMediaMessage(old);
-
-                    await sock.sendMessage(chat, {
-                        sticker: buffer
-                    });
-
-                    continue;
-
-                }
-
-                // =======================
-                // DOCUMENT
-                // =======================
-
-                if (old.message.documentMessage) {
-
-                    const buffer = await sock.downloadMediaMessage(old);
-
-                    await sock.sendMessage(chat, {
-                        document: buffer,
-                        mimetype: old.message.documentMessage.mimetype,
-                        fileName: old.message.documentMessage.fileName
-                    });
-
-                    continue;
-
-                }
-
-                // =======================
-                // CONTACT
-                // =======================
-
-                if (old.message.contactMessage) {
-
-                    await sock.sendMessage(chat, {
-                        contacts: {
-                            displayName: old.message.contactMessage.displayName,
-                            contacts: [old.message.contactMessage]
-                        }
-                    });
-
-                    continue;
-
-                }
-
-                // =======================
-                // LOCATION
-                // =======================
-
-                if (old.message.locationMessage) {
-
-                    await sock.sendMessage(chat, {
-                        location: {
-                            degreesLatitude: old.message.locationMessage.degreesLatitude,
-                            degreesLongitude: old.message.locationMessage.degreesLongitude
-                        }
-                    });
-
-                    continue;
-
                 }
 
             } catch (err) {
-
-                console.log("❌ AntiDelete Error:", err.message);
-
+                console.log("AntiDelete Error:", err.message);
             }
-
         }
-
-    });    // =======================
-    // BOT READY
-    // =======================
+    });
 
     console.log(`🤖 ${config.BOT_NAME} is now online.`);
-
-} // END startBot()
+}
 
 // =======================
-// START BOT
+// START
 // =======================
 
 startBot().catch(err => {
-
-    console.error("❌ Failed to start bot:");
-    console.error(err);
-
-    setTimeout(() => {
-
-        console.log("🔄 Restarting bot...");
-
-        startBot();
-
-    }, 5000);
-
+    console.error("Failed:", err);
+    setTimeout(startBot, 5000);
 });
 
 // =======================
-// AUTO RESTART ON CRASH
+// CRASH HANDLERS
 // =======================
 
-process.on("uncaughtException", (err) => {
+process.on("uncaughtException", console.error);
+process.on("unhandledRejection", console.error);
 
-    console.log("══════════════════════════════");
-    console.log("❌ UNCAUGHT EXCEPTION");
-    console.error(err);
-    console.log("══════════════════════════════");
-
-});
-
-process.on("unhandledRejection", (reason) => {
-
-    console.log("══════════════════════════════");
-    console.log("❌ UNHANDLED REJECTION");
-    console.error(reason);
-    console.log("══════════════════════════════");
-
-});
-
-// =======================
-// SHUTDOWN
-// =======================
-
-process.on("SIGINT", () => {
-
-    console.log("🛑 Stopping EZED XMD...");
-    process.exit(0);
-
-});
-
-process.on("SIGTERM", () => {
-
-    console.log("🛑 Process Terminated.");
-    process.exit(0);
-
-});
+process.on("SIGINT", () => process.exit(0));
+process.on("SIGTERM", () => process.exit(0));
