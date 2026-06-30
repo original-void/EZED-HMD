@@ -337,23 +337,27 @@ async function startBot() {
 
         try {
 
-            await plugin.execute({
-                sock,
-                msg,
-                from,
-                body,
-                args,
-                config,
-                runtime
-            });
+    await plugin.execute({
+        sock,
+        msg,
+        from,
+        body,
+        args,
+        config,
+        runtime
+    });
 
-        } catch (err) {
+    console.log(`✅ ${command} executed successfully.`);
 
-            console.error(err);
+} catch (err) {
 
-            await sock.sendMessage(from, {
-                text: "❌ Error while executing command."
-            });
+    console.error(`Plugin Error (${command})`);
+    console.error(err);
+
+    await sock.sendMessage(from,{
+        text:
+`❌ An error occurred while running *${command}*.`
+    });
 
         }
 
