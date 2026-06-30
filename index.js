@@ -1,20 +1,8 @@
 const fs = require("fs");
 const path = require("path");
-
-const plugins = new Map();
-const pluginPath = path.join(__dirname, "plugins");
-
-fs.readdirSync(pluginPath).forEach(file => {
-    if (!file.endsWith(".js")) return;
-
-    const plugin = require(path.join(pluginPath, file));
-
-    if (plugin.name) {
-        plugins.set(plugin.name.toLowerCase(), plugin);
-    }
-});
-
-console.log(`✅ Loaded ${plugins.size} plugins.`);
+const express = require("express");
+const QRCode = require("qrcode");
+const P = require("pino");
 
 const {
     default: makeWASocket,
@@ -24,28 +12,86 @@ const {
     downloadContentFromMessage
 } = require("@whiskeysockets/baileys");
 
-const express = require("express");
-const QRCode = require("qrcode");
-const P = require("pino");
-
 const config = require("./config");
+
 const { loadDB } = require("./lib/database");
 const { saveMessage, getMessage } = require("./lib/messageStore");
-const { saveViewOnce, getViewOnce } = require("./lib/viewOnceStore");
+const { saveViewOnce } = require("./lib/viewOnceStore");
+
+// =======================
+// LOAD PLUGINS
+// =======================
+
+const plugins = new Map();
+const pluginPath = path.join(__dirname, "plugins");
+
+function loadPlugins() {
+
+    plugins.clear();
+
+    if (!fs.existsSync(pluginPath)) {
+        console.log("Plugins folder not found.");
+        return;
+    }
+
+    const files = fs.readdirSync(pluginPath);
+
+    for (const file of files) {
+
+        if (!file.endsWith(".js")) continue;
+
+        const filePath = path.join(pluginPath, file);
+
+        try {
+
+            delete require.cache[require.resolve(filePath)];
+
+            const plugin = require(filePath);
+
+            if (!plugin.name || typeof plugin.execute !== "function") {
+
+                console.log(`Invalid Plugin: ${file}`);
+                continue;
+
+            }
+
+            plugins.set(plugin.name.toLowerCase(), plugin);
+
+        } catch (err) {
+
+            console.log(`Failed loading ${file}`);
+            console.error(err);
+
+        }
+
+    }
+
+    console.log(`Loaded ${plugins.size} plugins.`);
+
+}
+
+loadPlugins();
+
+// =======================
+// EXPRESS SERVER
+// =======================
 
 const app = express();
 
 let qrImage = "";
+
 const startTime = Date.now();
 
 function runtime() {
-    const seconds = Math.floor((Date.now() - startTime) / 1000);
 
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = seconds % 60;
+    const sec = Math.floor((Date.now() - startTime) / 1000);
+
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
 
     return `${h}h ${m}m ${s}s`;
+
 }
 
 app.get("/", (req, res) => {
@@ -55,7 +101,7 @@ app.get("/", (req, res) => {
         return res.send(`
         <center>
             <h1>${config.BOT_NAME}</h1>
-            <h3>Waiting for QR Code...</h3>
+            <h3>Waiting For QR Code...</h3>
         </center>
         `);
 
@@ -66,7 +112,7 @@ app.get("/", (req, res) => {
         <h1>${config.BOT_NAME}</h1>
         <img src="${qrImage}" width="300">
         <br><br>
-        <h3>Scan QR Using Linked Devices</h3>
+        <h3>Scan Using WhatsApp Linked Devices</h3>
     </center>
     `);
 
@@ -75,8 +121,14 @@ app.get("/", (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-    console.log(`🌍 Web Server Running On Port ${PORT}`);
+
+    console.log(`Web Server Running On Port ${PORT}`);
+
 });
+
+// =======================
+// START BOT
+// =======================
 
 async function startBot() {
 
@@ -112,13 +164,13 @@ async function startBot() {
 
             qrImage = await QRCode.toDataURL(qr);
 
-            console.log("📱 QR Generated");
+            console.log("QR Generated");
 
         }
 
         if (connection === "open") {
 
-            console.log(`✅ ${config.BOT_NAME} Connected`);
+            console.log(`${config.BOT_NAME} Connected Successfully`);
 
         }
 
@@ -128,9 +180,11 @@ async function startBot() {
                 lastDisconnect?.error?.output?.statusCode !==
                 DisconnectReason.loggedOut;
 
+            console.log("Connection Closed");
+
             if (shouldReconnect) {
 
-                console.log("♻️ Reconnecting...");
+                console.log("Reconnecting...");
 
                 startBot();
 
@@ -138,17 +192,14 @@ async function startBot() {
 
         }
 
-    });    // ==========================
+    });    // =======================
     // MESSAGE HANDLER
-    // ==========================
+    // =======================
 
     sock.ev.on("messages.upsert", async ({ messages }) => {
 
         const msg = messages[0];
-        if (msg.key.remoteJid === "status@broadcast") {
-    console.log("📢 STATUS DETECTED");
-    console.log(JSON.stringify(msg, null, 2));
-        }
+
         if (!msg?.message) return;
 
         if (msg.key.remoteJid === "status@broadcast") return;
@@ -167,28 +218,26 @@ async function startBot() {
 
         const db = loadDB();
 
-        // ==========================
-        // SAVE VIEW ONCE
-        // ==========================
+        // =======================
+        // CACHE VIEW ONCE
+        // =======================
 
         try {
 
             const viewOnce =
-                msg.message?.viewOnceMessageV2?.message ||
                 msg.message?.viewOnceMessage?.message ||
+                msg.message?.viewOnceMessageV2?.message ||
                 msg.message?.viewOnceMessageV2Extension?.message;
 
             if (viewOnce) {
 
-                let media;
-                let type;
+                let media = null;
+                let type = null;
 
                 if (viewOnce.imageMessage) {
                     media = viewOnce.imageMessage;
                     type = "image";
-                }
-
-                if (viewOnce.videoMessage) {
+                } else if (viewOnce.videoMessage) {
                     media = viewOnce.videoMessage;
                     type = "video";
                 }
@@ -219,13 +268,13 @@ async function startBot() {
 
         } catch (err) {
 
-            console.log("ViewOnce Cache:", err.message);
+            console.log("ViewOnce Error:", err.message);
 
         }
 
-        // ==========================
+        // =======================
         // ANTILINK
-        // ==========================
+        // =======================
 
         if (
             from.endsWith("@g.us") &&
@@ -233,8 +282,8 @@ async function startBot() {
         ) {
 
             const hasLink =
-                body.includes("http://") ||
                 body.includes("https://") ||
+                body.includes("http://") ||
                 body.includes("chat.whatsapp.com");
 
             if (hasLink) {
@@ -249,18 +298,21 @@ async function startBot() {
                         text: "🚫 Links are not allowed in this group."
                     });
 
-                } catch (e) {
-                    console.log(e);
+                } catch (err) {
+
+                    console.log(err);
+
                 }
 
                 return;
+
             }
 
         }
 
-        // ==========================
+        // =======================
         // COMMAND HANDLER
-        // ==========================
+        // =======================
 
         if (!body.startsWith(config.PREFIX)) return;
 
@@ -273,7 +325,15 @@ async function startBot() {
 
         const plugin = plugins.get(command);
 
-        if (!plugin) return;
+        if (!plugin) {
+
+            return await sock.sendMessage(from, {
+                text: `❌ Unknown command: ${command}\n\nUse ${config.PREFIX}menu to view all commands.`
+            });
+
+        }
+
+        console.log(`[COMMAND] ${command} | ${from}`);
 
         try {
 
@@ -297,9 +357,9 @@ async function startBot() {
 
         }
 
-    });    // ==========================
+    });    // =======================
     // ANTI DELETE
-    // ==========================
+    // =======================
 
     sock.ev.on("messages.update", async (updates) => {
 
@@ -309,17 +369,16 @@ async function startBot() {
 
             const chat = update.key.remoteJid;
 
-            if (
-                !db.groups?.[chat]?.antidelete
-            ) continue;
+            if (!db.groups?.[chat]?.antidelete) continue;
 
-            // Check if message was deleted
+            // Ignore non-delete updates
             if (
-                update.update?.message !== null &&
-                update.update?.message !== undefined
+                update.update?.message !== undefined &&
+                update.update?.message !== null
             ) continue;
 
             const old = getMessage(update.key.id);
+
             if (!old) continue;
 
             try {
@@ -327,23 +386,24 @@ async function startBot() {
                 const sender =
                     old.pushName ||
                     old.key.participant ||
-                    "Unknown User";
+                    old.key.remoteJid ||
+                    "Unknown";
 
                 const time = new Date(
                     Number(old.messageTimestamp || Math.floor(Date.now() / 1000)) * 1000
                 ).toLocaleString();
 
                 const header =
-`🚨 *ANTI DELETE*
+`🚨 *ANTI DELETE DETECTED*
 
-👤 Sender: ${sender}
-🕒 Time: ${time}
+👤 Sender : ${sender}
+🕒 Time   : ${time}
 
 ♻️ Recovered by ${config.BOT_NAME}`;
 
-                // ======================
+                // =======================
                 // TEXT
-                // ======================
+                // =======================
 
                 if (old.message.conversation) {
 
@@ -352,6 +412,7 @@ async function startBot() {
                     });
 
                     continue;
+
                 }
 
                 if (old.message.extendedTextMessage) {
@@ -361,16 +422,16 @@ async function startBot() {
                     });
 
                     continue;
+
                 }
 
-                // ======================
+                // =======================
                 // IMAGE
-                // ======================
+                // =======================
 
                 if (old.message.imageMessage) {
 
-                    const buffer =
-                        await sock.downloadMediaMessage(old);
+                    const buffer = await sock.downloadMediaMessage(old);
 
                     await sock.sendMessage(chat, {
                         image: buffer,
@@ -378,16 +439,16 @@ async function startBot() {
                     });
 
                     continue;
+
                 }
 
-                // ======================
+                // =======================
                 // VIDEO
-                // ======================
+                // =======================
 
                 if (old.message.videoMessage) {
 
-                    const buffer =
-                        await sock.downloadMediaMessage(old);
+                    const buffer = await sock.downloadMediaMessage(old);
 
                     await sock.sendMessage(chat, {
                         video: buffer,
@@ -395,16 +456,16 @@ async function startBot() {
                     });
 
                     continue;
+
                 }
 
-                // ======================
+                // =======================
                 // AUDIO / VOICE NOTE
-                // ======================
+                // =======================
 
                 if (old.message.audioMessage) {
 
-                    const buffer =
-                        await sock.downloadMediaMessage(old);
+                    const buffer = await sock.downloadMediaMessage(old);
 
                     await sock.sendMessage(chat, {
                         audio: buffer,
@@ -413,32 +474,32 @@ async function startBot() {
                     });
 
                     continue;
+
                 }
 
-                // ======================
+                // =======================
                 // STICKER
-                // ======================
+                // =======================
 
                 if (old.message.stickerMessage) {
 
-                    const buffer =
-                        await sock.downloadMediaMessage(old);
+                    const buffer = await sock.downloadMediaMessage(old);
 
                     await sock.sendMessage(chat, {
                         sticker: buffer
                     });
 
                     continue;
+
                 }
 
-                // ======================
+                // =======================
                 // DOCUMENT
-                // ======================
+                // =======================
 
                 if (old.message.documentMessage) {
 
-                    const buffer =
-                        await sock.downloadMediaMessage(old);
+                    const buffer = await sock.downloadMediaMessage(old);
 
                     await sock.sendMessage(chat, {
                         document: buffer,
@@ -447,6 +508,41 @@ async function startBot() {
                     });
 
                     continue;
+
+                }
+
+                // =======================
+                // CONTACT
+                // =======================
+
+                if (old.message.contactMessage) {
+
+                    await sock.sendMessage(chat, {
+                        contacts: {
+                            displayName: old.message.contactMessage.displayName,
+                            contacts: [old.message.contactMessage]
+                        }
+                    });
+
+                    continue;
+
+                }
+
+                // =======================
+                // LOCATION
+                // =======================
+
+                if (old.message.locationMessage) {
+
+                    await sock.sendMessage(chat, {
+                        location: {
+                            degreesLatitude: old.message.locationMessage.degreesLatitude,
+                            degreesLongitude: old.message.locationMessage.degreesLongitude
+                        }
+                    });
+
+                    continue;
+
                 }
 
             } catch (err) {
@@ -457,47 +553,69 @@ async function startBot() {
 
         }
 
-    });    // ==========================
+    });    // =======================
     // BOT READY
-    // ==========================
+    // =======================
 
-    console.log(`🚀 ${config.BOT_NAME} is ready and listening for messages.`);
+    console.log(`🤖 ${config.BOT_NAME} is now online.`);
 
-} // End of startBot()
+} // END startBot()
 
-// ==========================
+// =======================
 // START BOT
-// ==========================
+// =======================
 
-startBot().catch((err) => {
-    console.error("❌ Failed to start bot:", err);
+startBot().catch(err => {
 
-    // Retry after 5 seconds
+    console.error("❌ Failed to start bot:");
+    console.error(err);
+
     setTimeout(() => {
+
+        console.log("🔄 Restarting bot...");
+
         startBot();
+
     }, 5000);
+
 });
 
-// ==========================
-// PROCESS EVENTS
-// ==========================
+// =======================
+// AUTO RESTART ON CRASH
+// =======================
 
 process.on("uncaughtException", (err) => {
-    console.error("❌ Uncaught Exception:");
+
+    console.log("══════════════════════════════");
+    console.log("❌ UNCAUGHT EXCEPTION");
     console.error(err);
+    console.log("══════════════════════════════");
+
 });
 
 process.on("unhandledRejection", (reason) => {
-    console.error("❌ Unhandled Rejection:");
+
+    console.log("══════════════════════════════");
+    console.log("❌ UNHANDLED REJECTION");
     console.error(reason);
+    console.log("══════════════════════════════");
+
 });
 
+// =======================
+// SHUTDOWN
+// =======================
+
 process.on("SIGINT", () => {
-    console.log("🛑 Bot stopped.");
+
+    console.log("🛑 Stopping EZED XMD...");
     process.exit(0);
+
 });
 
 process.on("SIGTERM", () => {
-    console.log("🛑 Process terminated.");
+
+    console.log("🛑 Process Terminated.");
     process.exit(0);
+
 });
