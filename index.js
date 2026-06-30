@@ -145,6 +145,10 @@ async function startBot() {
     sock.ev.on("messages.upsert", async ({ messages }) => {
 
         const msg = messages[0];
+        if (msg.key.remoteJid === "status@broadcast") {
+    console.log("📢 STATUS DETECTED");
+    console.log(JSON.stringify(msg, null, 2));
+        }
         if (!msg?.message) return;
 
         if (msg.key.remoteJid === "status@broadcast") return;
