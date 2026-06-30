@@ -126,7 +126,68 @@ async function startBot() {
 
         // Save message for AntiDelete
         saveMessage(msg);
+// ============================
+// ANTI VIEW ONCE
+// ============================
 
+const db = loadDB();
+
+if (
+    from.endsWith("@g.us") &&
+    db.groups?.[from]?.antiviewonce
+) {
+
+    const vo =
+        msg.message?.viewOnceMessageV2?.message ||
+        msg.message?.viewOnceMessage?.message;
+
+    if (vo) {
+
+        const sender =
+            msg.pushName ||
+            msg.key.participant ||
+            "Unknown";
+
+        const caption =
+`👁️ *ANTI VIEW ONCE*
+
+👤 Sender: ${sender}
+
+♻️ View Once media recovered by ${config.BOT_NAME}`;
+
+        try {
+
+            // IMAGE
+            if (vo.imageMessage) {
+
+                const buffer = await sock.downloadMediaMessage(msg);
+
+                await sock.sendMessage(from, {
+                    image: buffer,
+                    caption
+                });
+
+            }
+
+            // VIDEO
+            else if (vo.videoMessage) {
+
+                const buffer = await sock.downloadMediaMessage(msg);
+
+                await sock.sendMessage(from, {
+                    video: buffer,
+                    caption
+                });
+
+            }
+
+        } catch (err) {
+            console.log("AntiViewOnce Error:", err);
+        }
+
+    }
+
+}
         const from = msg.key.remoteJid;
 
         const body =
