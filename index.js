@@ -17,7 +17,8 @@ const {
     default: makeWASocket,
     useMultiFileAuthState,
     fetchLatestBaileysVersion,
-    DisconnectReason
+    DisconnectReason,
+    downloadContentFromMessage
 } = require("@whiskeysockets/baileys");
 
 const express = require("express");
