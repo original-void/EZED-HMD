@@ -3,5 +3,7 @@ module.exports = {
     OWNER_NAME: "EZED X TECH",
     OWNER_NUMBER: "254112843071",
     PREFIX: ".",
-    VERSION: "1.0.0"
-}
+    VERSION: "1.0.0",
+
+    MISTRAL_API_KEY: "YOUR_MISTRAL_API_KEY"
+};
