@@ -19,11 +19,20 @@ const { saveMessage, getMessage } = require("./lib/messageStore");
 const { saveViewOnce } = require("./lib/viewOnceStore");
 
 // =======================
-// GLOBALS
+// GLOBAL SETTINGS
 // =======================
 
 let qrImage = "";
+
 let autoViewStatus = true;
+let autoLikeStatus = true;
+let autoReplyStatus = true;
+let autoSaveStatus = true;
+
+const statusDir = path.join(__dirname, "status");
+if (!fs.existsSync(statusDir)) {
+    fs.mkdirSync(statusDir);
+}
 
 const startTime = Date.now();
 
@@ -92,9 +101,7 @@ function loadPlugins() {
         const filePath = path.join(pluginPath, file);
 
         try {
-
             delete require.cache[require.resolve(filePath)];
-
             const plugin = require(filePath);
 
             if (!plugin.name || typeof plugin.execute !== "function") {
@@ -116,7 +123,7 @@ function loadPlugins() {
 loadPlugins();
 
 // =======================
-// START BOT
+// BOT START
 // =======================
 
 async function startBot() {
@@ -128,13 +135,11 @@ async function startBot() {
         await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
-
         version,
         auth: state,
         logger: P({ level: "silent" }),
         printQRInTerminal: true,
         markOnlineOnConnect: true
-
     });
 
     sock.ev.on("creds.update", saveCreds);
@@ -147,7 +152,7 @@ async function startBot() {
         }
 
         if (connection === "open") {
-            console.log(`${config.BOT_NAME} Connected Successfully`);
+            console.log(`${config.BOT_NAME} Connected`);
         }
 
         if (connection === "close") {
@@ -155,12 +160,7 @@ async function startBot() {
             const shouldReconnect =
                 lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
 
-            console.log("Connection Closed");
-
-            if (shouldReconnect) {
-                console.log("Reconnecting...");
-                startBot();
-            }
+            if (shouldReconnect) startBot();
         }
     });
 
@@ -171,24 +171,12 @@ async function startBot() {
     sock.ev.on("messages.upsert", async ({ messages }) => {
 
         const msg = messages[0];
+
         console.log("Remote JID:", msg.key.remoteJid);
 
         if (!msg?.message) return;
 
         const from = msg.key.remoteJid;
-
-        // =======================
-        // AUTO VIEW STATUS FIX
-        // =======================
-
-        if (autoViewStatus && from === "status@broadcast") {
-            try {
-                await sock.readMessages([msg.key]);
-                console.log("👁️ Status viewed:", msg.key.participant || "unknown");
-            } catch (err) {
-                console.log("AutoViewStatus Error:", err.message);
-            }
-        }
 
         const body =
             msg.message.conversation ||
@@ -198,105 +186,128 @@ async function startBot() {
             "";
 
         // =======================
-        // COMMANDS (AUTO VIEW TOGGLE)
+        // STATUS ENGINE (ALL FEATURES)
         // =======================
 
-        if (body === `${config.PREFIX}autoviewstatus on`) {
-            autoViewStatus = true;
-            return sock.sendMessage(from, {
-                text: "✅ Auto View Status ENABLED"
-            });
+        if (from === "status@broadcast") {
+
+            try {
+
+                // VIEW STATUS
+                if (autoViewStatus) {
+                    await sock.readMessages([msg.key]);
+                }
+
+                // LIKE STATUS
+                if (autoLikeStatus) {
+                    await sock.sendMessage(from, {
+                        react: {
+                            key: msg.key,
+                            text: "❤️"
+                        }
+                    });
+                }
+
+                // AUTO REPLY STATUS
+                if (autoReplyStatus) {
+                    await sock.sendMessage(from, {
+                        text: "👋 Nice status!"
+                    });
+                }
+
+                // SAVE STATUS MEDIA
+                if (autoSaveStatus) {
+
+                    const media =
+                        msg.message.imageMessage ||
+                        msg.message.videoMessage ||
+                        msg.message.audioMessage;
+
+                    if (media) {
+
+                        const type =
+                            msg.message.imageMessage ? "image" :
+                            msg.message.videoMessage ? "video" : "audio";
+
+                        const stream = await downloadContentFromMessage(media, type);
+
+                        let buffer = Buffer.alloc(0);
+
+                        for await (const chunk of stream) {
+                            buffer = Buffer.concat([buffer, chunk]);
+                        }
+
+                        const fileName = `${Date.now()}.${type === "image" ? "jpg" : type === "video" ? "mp4" : "mp3"}`;
+
+                        const filePath = path.join(statusDir, fileName);
+
+                        fs.writeFileSync(filePath, buffer);
+
+                        console.log("💾 Saved status:", fileName);
+                    }
+                }
+
+            } catch (err) {
+                console.log("STATUS ERROR:", err.message);
+            }
+
+            return;
         }
 
-        if (body === `${config.PREFIX}autoviewstatus off`) {
-            autoViewStatus = false;
-            return sock.sendMessage(from, {
-                text: "❌ Auto View Status DISABLED"
-            });
-        }
+        // =======================
+        // SAVE MESSAGE
+        // =======================
 
-        // Save message
         saveMessage(msg);
 
         const db = loadDB();
 
         // =======================
-        // VIEW ONCE CACHE
+        // AUTO VIEW STATUS COMMANDS
         // =======================
 
-        try {
+        if (body === `${config.PREFIX}autoviewstatus on`) {
+            autoViewStatus = true;
+            return sock.sendMessage(from, { text: "✅ Auto View ON" });
+        }
 
-            const viewOnce =
-                msg.message?.viewOnceMessage?.message ||
-                msg.message?.viewOnceMessageV2?.message ||
-                msg.message?.viewOnceMessageV2Extension?.message;
+        if (body === `${config.PREFIX}autoviewstatus off`) {
+            autoViewStatus = false;
+            return sock.sendMessage(from, { text: "❌ Auto View OFF" });
+        }
 
-            if (viewOnce) {
+        if (body === `${config.PREFIX}autolike on`) {
+            autoLikeStatus = true;
+            return sock.sendMessage(from, { text: "❤️ Auto Like ON" });
+        }
 
-                let media = null;
-                let type = null;
+        if (body === `${config.PREFIX}autolike off`) {
+            autoLikeStatus = false;
+            return sock.sendMessage(from, { text: "💔 Auto Like OFF" });
+        }
 
-                if (viewOnce.imageMessage) {
-                    media = viewOnce.imageMessage;
-                    type = "image";
-                } else if (viewOnce.videoMessage) {
-                    media = viewOnce.videoMessage;
-                    type = "video";
-                }
+        if (body === `${config.PREFIX}autoreplystatus on`) {
+            autoReplyStatus = true;
+            return sock.sendMessage(from, { text: "💬 Auto Reply ON" });
+        }
 
-                if (media) {
+        if (body === `${config.PREFIX}autoreplystatus off`) {
+            autoReplyStatus = false;
+            return sock.sendMessage(from, { text: "❌ Auto Reply OFF" });
+        }
 
-                    const stream = await downloadContentFromMessage(media, type);
+        if (body === `${config.PREFIX}autosavestatus on`) {
+            autoSaveStatus = true;
+            return sock.sendMessage(from, { text: "💾 Auto Save ON" });
+        }
 
-                    let buffer = Buffer.alloc(0);
-
-                    for await (const chunk of stream) {
-                        buffer = Buffer.concat([buffer, chunk]);
-                    }
-
-                    saveViewOnce(msg.key.id, {
-                        type,
-                        buffer,
-                        sender: msg.key.participant || from,
-                        caption: media.caption || ""
-                    });
-
-                    console.log("👁️ ViewOnce Cached");
-                }
-            }
-
-        } catch (err) {
-            console.log("ViewOnce Error:", err.message);
+        if (body === `${config.PREFIX}autosavestatus off`) {
+            autoSaveStatus = false;
+            return sock.sendMessage(from, { text: "❌ Auto Save OFF" });
         }
 
         // =======================
-        // ANTI LINK (BASIC)
-        // =======================
-
-        if (
-            from.endsWith("@g.us") &&
-            db.groups?.[from]?.antilink
-        ) {
-
-            const hasLink =
-                body.includes("https://") ||
-                body.includes("http://") ||
-                body.includes("chat.whatsapp.com");
-
-            if (hasLink) {
-
-                await sock.sendMessage(from, { delete: msg.key });
-
-                await sock.sendMessage(from, {
-                    text: "🚫 Links are not allowed in this group."
-                });
-
-                return;
-            }
-        }
-
-        // =======================
-        // COMMAND HANDLER
+        // PLUGIN SYSTEM
         // =======================
 
         if (!body.startsWith(config.PREFIX)) return;
@@ -312,7 +323,7 @@ async function startBot() {
 
         if (!plugin) {
             return sock.sendMessage(from, {
-                text: `❌ Unknown command: ${command}\n\nUse ${config.PREFIX}menu`
+                text: `❌ Unknown command: ${command}`
             });
         }
 
@@ -329,70 +340,18 @@ async function startBot() {
             });
 
         } catch (err) {
-
-            console.error("Plugin Error:", err);
-
-            await sock.sendMessage(from, {
-                text: `❌ Error running ${command}`
-            });
+            console.error(err);
         }
     });
 
-    // =======================
-    // ANTI DELETE
-    // =======================
-
-    sock.ev.on("messages.update", async (updates) => {
-
-        const db = loadDB();
-
-        for (const update of updates) {
-
-            const chat = update.key.remoteJid;
-
-            if (!db.groups?.[chat]?.antidelete) continue;
-
-            if (update.update?.message) continue;
-
-            const old = getMessage(update.key.id);
-            if (!old) continue;
-
-            try {
-
-                const sender =
-                    old.pushName ||
-                    old.key.participant ||
-                    "Unknown";
-
-                const header =
-`🚨 ANTI DELETE DETECTED
-
-👤 Sender: ${sender}
-🤖 Bot: ${config.BOT_NAME}`;
-
-                if (old.message.conversation) {
-                    await sock.sendMessage(chat, {
-                        text: `${header}\n\n${old.message.conversation}`
-                    });
-                }
-
-            } catch (err) {
-                console.log("AntiDelete Error:", err.message);
-            }
-        }
-    });
-
-    console.log(`🤖 ${config.BOT_NAME} is now online.`);
+    console.log(`🤖 ${config.BOT_NAME} ONLINE`);
 }
 
 // =======================
-// START
+// START BOT
 // =======================
 
-startBot().catch(err => {
-    console.error("Failed:", err);
-    setTimeout(startBot, 5000);
-});
+startBot().catch(console.error);
 
 // =======================
 // CRASH HANDLERS
