@@ -4,6 +4,36 @@ const path = require("path");
 const plugins = new Map();
 const pluginPath = path.join(__dirname, "plugins");
 
+function loadPlugins() {
+
+    plugins.clear();
+
+    fs.readdirSync(pluginPath).forEach(file => {
+
+        if (!file.endsWith(".js")) return;
+
+        const filePath = path.join(pluginPath, file);
+
+        delete require.cache[require.resolve(filePath)];
+
+        const plugin = require(filePath);
+
+        if (plugin.name) {
+            plugins.set(plugin.name.toLowerCase(), plugin);
+        }
+
+    });
+
+    console.log(`✅ Loaded ${plugins.size} plugins.`);
+
+}
+
+loadPlugins();const fs = require("fs");
+const path = require("path");
+
+const plugins = new Map();
+const pluginPath = path.join(__dirname, "plugins");
+
 fs.readdirSync(pluginPath).forEach(file => {
     if (!file.endsWith(".js")) return;
 
@@ -16,6 +46,129 @@ fs.readdirSync(pluginPath).forEach(file => {
 
 console.log(`✅ Loaded ${plugins.size} plugins.`);
 
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    fetchLatestBaileysVersion,
+    DisconnectReason,
+    downloadContentFromMessage
+} = require("@whiskeysockets/baileys");
+
+const express = require("express");
+const QRCode = require("qrcode");
+const P = require("pino");
+
+const config = require("./config");
+const { loadDB } = require("./lib/database");
+const { saveMessage, getMessage } = require("./lib/messageStore");
+const { saveViewOnce, getViewOnce } = require("./lib/viewOnceStore");
+
+const app = express();
+
+let qrImage = "";
+const startTime = Date.now();
+
+function runtime() {
+    const seconds = Math.floor((Date.now() - startTime) / 1000);
+
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+
+    return `${h}h ${m}m ${s}s`;
+}
+
+app.get("/", (req, res) => {
+
+    if (!qrImage) {
+
+        return res.send(`
+        <center>
+            <h1>${config.BOT_NAME}</h1>
+            <h3>Waiting for QR Code...</h3>
+        </center>
+        `);
+
+    }
+
+    res.send(`
+    <center>
+        <h1>${config.BOT_NAME}</h1>
+        <img src="${qrImage}" width="300">
+        <br><br>
+        <h3>Scan QR Using Linked Devices</h3>
+    </center>
+    `);
+
+});
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+    console.log(`🌍 Web Server Running On Port ${PORT}`);
+});
+
+async function startBot() {
+
+    const { state, saveCreds } =
+        await useMultiFileAuthState("./session");
+
+    const { version } =
+        await fetchLatestBaileysVersion();
+
+    const sock = makeWASocket({
+
+        version,
+
+        auth: state,
+
+        logger: P({
+            level: "silent"
+        }),
+
+        printQRInTerminal: true
+
+    });
+
+    sock.ev.on("creds.update", saveCreds);
+
+    sock.ev.on("connection.update", async ({
+        connection,
+        qr,
+        lastDisconnect
+    }) => {
+
+        if (qr) {
+
+            qrImage = await QRCode.toDataURL(qr);
+
+            console.log("📱 QR Generated");
+
+        }
+
+        if (connection === "open") {
+
+            console.log(`✅ ${config.BOT_NAME} Connected`);
+
+        }
+
+        if (connection === "close") {
+
+            const shouldReconnect =
+                lastDisconnect?.error?.output?.statusCode !==
+                DisconnectReason.loggedOut;
+
+            if (shouldReconnect) {
+
+                console.log("♻️ Reconnecting...");
+
+                startBot();
+
+            }
+
+        }
+
+    });
 const {
     default: makeWASocket,
     useMultiFileAuthState,
