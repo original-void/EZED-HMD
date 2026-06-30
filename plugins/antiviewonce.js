@@ -1,64 +1,62 @@
-// ============================
-// ANTI VIEW ONCE
-// ============================
+const { loadDB, saveDB } = require("../lib/database");
 
-const db = loadDB();
+module.exports = {
+    name: "antiviewonce",
+    description: "Enable or Disable Anti View Once",
 
-if (
-    from.endsWith("@g.us") &&
-    db.groups?.[from]?.antiviewonce
-) {
-    const viewOnce =
-        msg.message?.viewOnceMessageV2?.message ||
-        msg.message?.viewOnceMessage?.message;
+    async execute({ sock, from, args }) {
 
-    if (viewOnce) {
-        try {
-
-            const sender =
-                msg.pushName ||
-                msg.key.participant ||
-                "Unknown";
-
-            const caption =
-`👁️ *ANTI VIEW ONCE*
-
-👤 Sender: ${sender}
-
-♻️ View Once recovered by ${config.BOT_NAME}`;
-
-            if (viewOnce.imageMessage) {
-
-                const mediaMsg = {
-                    key: msg.key,
-                    message: viewOnce
-                };
-
-                const buffer = await sock.downloadMediaMessage(mediaMsg);
-
-                await sock.sendMessage(from, {
-                    image: buffer,
-                    caption
-                });
-
-            } else if (viewOnce.videoMessage) {
-
-                const mediaMsg = {
-                    key: msg.key,
-                    message: viewOnce
-                };
-
-                const buffer = await sock.downloadMediaMessage(mediaMsg);
-
-                await sock.sendMessage(from, {
-                    video: buffer,
-                    caption
-                });
-
-            }
-
-        } catch (err) {
-            console.error("AntiViewOnce:", err);
+        if (!from.endsWith("@g.us")) {
+            return await sock.sendMessage(from, {
+                text: "❌ This command only works in groups."
+            });
         }
+
+        const db = loadDB();
+
+        if (!db.groups) db.groups = {};
+        if (!db.groups[from]) db.groups[from] = {};
+
+        if (!args[0]) {
+            return await sock.sendMessage(from, {
+                text:
+`╭━━〔 👁️ ANTI VIEW ONCE 〕━━⬣
+
+Usage:
+.antiviewonce on
+.antiviewonce off
+
+╰━━━━━━━━━━━━━━━━━━⬣`
+            });
+        }
+
+        const option = args[0].toLowerCase();
+
+        if (option === "on") {
+
+            db.groups[from].antiviewonce = true;
+            saveDB(db);
+
+            return await sock.sendMessage(from, {
+                text: "✅ Anti View Once Enabled."
+            });
+
+        }
+
+        if (option === "off") {
+
+            db.groups[from].antiviewonce = false;
+            saveDB(db);
+
+            return await sock.sendMessage(from, {
+                text: "❌ Anti View Once Disabled."
+            });
+
+        }
+
+        return sock.sendMessage(from, {
+            text: "Use:\n.antiviewonce on\n.antiviewonce off"
+        });
+
     }
-}
+};
