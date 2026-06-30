@@ -11,7 +11,7 @@ fs.readdirSync(pluginPath).forEach(file => {
     plugins.set(plugin.name.toLowerCase(), plugin);
 });
 
-console.log(`Loaded ${plugins.size} plugins.`);
+console.log(`✅ Loaded ${plugins.size} plugins.`);
 
 const {
     default: makeWASocket,
@@ -43,6 +43,10 @@ function runtime() {
     return `${h}h ${m}m ${s}s`;
 }
 
+// ==========================
+// WEB SERVER
+// ==========================
+
 app.get("/", (req, res) => {
 
     if (!qrImage) {
@@ -68,8 +72,12 @@ app.get("/", (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-    console.log(`${config.BOT_NAME} Web Server Running`);
+    console.log(`🌐 ${config.BOT_NAME} Web Server Running on Port ${PORT}`);
 });
+
+// ==========================
+// START BOT
+// ==========================
 
 async function startBot() {
 
@@ -96,11 +104,11 @@ async function startBot() {
 
         if (qr) {
             qrImage = await QRCode.toDataURL(qr);
-            console.log("QR Generated");
+            console.log("📱 QR Code Generated");
         }
 
         if (connection === "open") {
-            console.log(`${config.BOT_NAME} Connected`);
+            console.log(`✅ ${config.BOT_NAME} Connected Successfully`);
         }
 
         if (connection === "close") {
@@ -109,85 +117,30 @@ async function startBot() {
                 lastDisconnect?.error?.output?.statusCode !==
                 DisconnectReason.loggedOut;
 
+            console.log("❌ Connection Closed");
+
             if (shouldReconnect) {
+                console.log("🔄 Reconnecting...");
                 startBot();
             }
 
         }
 
-    });    // ============================
+    });    // ==========================
     // MESSAGE HANDLER
-    // ============================
+    // ==========================
 
     sock.ev.on("messages.upsert", async ({ messages }) => {
 
         const msg = messages[0];
         if (!msg?.message) return;
 
+        // Ignore status updates
+        if (msg.key.remoteJid === "status@broadcast") return;
+
         // Save message for AntiDelete
         saveMessage(msg);
-// ============================
-// ANTI VIEW ONCE
-// ============================
 
-const db = loadDB();
-
-if (
-    from.endsWith("@g.us") &&
-    db.groups?.[from]?.antiviewonce
-) {
-
-    const vo =
-        msg.message?.viewOnceMessageV2?.message ||
-        msg.message?.viewOnceMessage?.message;
-
-    if (vo) {
-
-        const sender =
-            msg.pushName ||
-            msg.key.participant ||
-            "Unknown";
-
-        const caption =
-`👁️ *ANTI VIEW ONCE*
-
-👤 Sender: ${sender}
-
-♻️ View Once media recovered by ${config.BOT_NAME}`;
-
-        try {
-
-            // IMAGE
-            if (vo.imageMessage) {
-
-                const buffer = await sock.downloadMediaMessage(msg);
-
-                await sock.sendMessage(from, {
-                    image: buffer,
-                    caption
-                });
-
-            }
-
-            // VIDEO
-            else if (vo.videoMessage) {
-
-                const buffer = await sock.downloadMediaMessage(msg);
-
-                await sock.sendMessage(from, {
-                    video: buffer,
-                    caption
-                });
-
-            }
-
-        } catch (err) {
-            console.log("AntiViewOnce Error:", err);
-        }
-
-    }
-
-}
         const from = msg.key.remoteJid;
 
         const body =
@@ -197,42 +150,103 @@ if (
             msg.message.videoMessage?.caption ||
             "";
 
-        // Ignore status updates
-        if (from === "status@broadcast") return;
-
         const db = loadDB();
 
-        // ============================
+        // ==========================
+        // ANTI VIEW ONCE
+        // ==========================
+
+        if (
+            from.endsWith("@g.us") &&
+            db.groups?.[from]?.antiviewonce
+        ) {
+
+            const viewOnce =
+                msg.message?.viewOnceMessageV2?.message ||
+                msg.message?.viewOnceMessage?.message;
+
+            if (viewOnce) {
+
+                try {
+
+                    const sender =
+                        msg.pushName ||
+                        msg.key.participant ||
+                        "Unknown";
+
+                    const caption =
+`👁️ *ANTI VIEW ONCE*
+
+👤 Sender: ${sender}
+
+♻️ Recovered by ${config.BOT_NAME}`;
+
+                    const mediaMsg = {
+                        key: msg.key,
+                        message: viewOnce
+                    };
+
+                    const buffer =
+                        await sock.downloadMediaMessage(mediaMsg);
+
+                    if (viewOnce.imageMessage) {
+
+                        await sock.sendMessage(from, {
+                            image: buffer,
+                            caption
+                        });
+
+                    } else if (viewOnce.videoMessage) {
+
+                        await sock.sendMessage(from, {
+                            video: buffer,
+                            caption
+                        });
+
+                    }
+
+                } catch (err) {
+
+                    console.log("AntiViewOnce Error:", err);
+
+                }
+
+            }
+
+        }
+
+        // ==========================
         // ANTILINK
-        // ============================
+        // ==========================
 
         if (
             from.endsWith("@g.us") &&
             db.groups?.[from]?.antilink
         ) {
 
-            const isLink =
+            const hasLink =
                 body.includes("http://") ||
                 body.includes("https://") ||
                 body.includes("chat.whatsapp.com");
 
-            if (isLink) {
+            if (hasLink) {
 
                 await sock.sendMessage(from, {
                     delete: msg.key
                 });
 
                 await sock.sendMessage(from, {
-                    text: "🚫 *Links are not allowed in this group!*"
+                    text: "🚫 Links are not allowed in this group."
                 });
 
                 return;
             }
+
         }
 
-        // ============================
+        // ==========================
         // COMMAND HANDLER
-        // ============================
+        // ==========================
 
         if (!body.startsWith(config.PREFIX)) return;
 
@@ -269,9 +283,9 @@ if (
 
         }
 
-    });    // ============================
+    });    // ==========================
     // ANTI DELETE
-    // ============================
+    // ==========================
 
     sock.ev.on("messages.update", async (updates) => {
 
@@ -280,54 +294,66 @@ if (
         for (const update of updates) {
 
             if (
-                !update.update?.message &&
-                db.groups?.[update.key.remoteJid]?.antidelete
+                !update.update?.message ||
+                update.update.message === null
             ) {
+
+                const chat = update.key.remoteJid;
+
+                if (!db.groups?.[chat]?.antidelete) continue;
 
                 const old = getMessage(update.key.id);
                 if (!old) continue;
 
-                const chat = update.key.remoteJid;
+                try {
 
-                const sender =
-                    old.pushName ||
-                    old.key.participant ||
-                    "Unknown User";
+                    const sender =
+                        old.pushName ||
+                        old.key.participant ||
+                        "Unknown";
 
-                const time = new Date(
-                    Number(old.messageTimestamp || Math.floor(Date.now() / 1000)) * 1000
-                ).toLocaleString();
+                    const time = new Date(
+                        Number(old.messageTimestamp || Math.floor(Date.now() / 1000)) * 1000
+                    ).toLocaleString();
 
-                const header =
+                    const header =
 `🚨 *ANTI DELETE DETECTED*
 
 👤 Sender: ${sender}
 🕒 Time: ${time}
 
-♻️ Message recovered by ${config.BOT_NAME}`;
+♻️ Recovered by ${config.BOT_NAME}`;
 
-                try {
-
+                    // =====================
                     // TEXT
+                    // =====================
+
                     if (old.message.conversation) {
+
                         await sock.sendMessage(chat, {
                             text: `${header}\n\n💬 ${old.message.conversation}`
                         });
+
                         continue;
                     }
 
-                    // EXTENDED TEXT
                     if (old.message.extendedTextMessage) {
+
                         await sock.sendMessage(chat, {
                             text: `${header}\n\n💬 ${old.message.extendedTextMessage.text}`
                         });
+
                         continue;
                     }
 
+                    // =====================
                     // IMAGE
+                    // =====================
+
                     if (old.message.imageMessage) {
 
-                        const buffer = await sock.downloadMediaMessage(old);
+                        const buffer =
+                            await sock.downloadMediaMessage(old);
 
                         await sock.sendMessage(chat, {
                             image: buffer,
@@ -337,10 +363,14 @@ if (
                         continue;
                     }
 
+                    // =====================
                     // VIDEO
+                    // =====================
+
                     if (old.message.videoMessage) {
 
-                        const buffer = await sock.downloadMediaMessage(old);
+                        const buffer =
+                            await sock.downloadMediaMessage(old);
 
                         await sock.sendMessage(chat, {
                             video: buffer,
@@ -350,22 +380,14 @@ if (
                         continue;
                     }
 
-                    // STICKER
-                    if (old.message.stickerMessage) {
-
-                        const buffer = await sock.downloadMediaMessage(old);
-
-                        await sock.sendMessage(chat, {
-                            sticker: buffer
-                        });
-
-                        continue;
-                    }
-
+                    // =====================
                     // AUDIO / VOICE NOTE
+                    // =====================
+
                     if (old.message.audioMessage) {
 
-                        const buffer = await sock.downloadMediaMessage(old);
+                        const buffer =
+                            await sock.downloadMediaMessage(old);
 
                         await sock.sendMessage(chat, {
                             audio: buffer,
@@ -376,10 +398,30 @@ if (
                         continue;
                     }
 
+                    // =====================
+                    // STICKER
+                    // =====================
+
+                    if (old.message.stickerMessage) {
+
+                        const buffer =
+                            await sock.downloadMediaMessage(old);
+
+                        await sock.sendMessage(chat, {
+                            sticker: buffer
+                        });
+
+                        continue;
+                    }
+
+                    // =====================
                     // DOCUMENT
+                    // =====================
+
                     if (old.message.documentMessage) {
 
-                        const buffer = await sock.downloadMediaMessage(old);
+                        const buffer =
+                            await sock.downloadMediaMessage(old);
 
                         await sock.sendMessage(chat, {
                             document: buffer,
@@ -392,7 +434,7 @@ if (
 
                 } catch (err) {
 
-                    console.log("AntiDelete Error:", err);
+                    console.error("AntiDelete Error:", err);
 
                 }
 
@@ -400,23 +442,35 @@ if (
 
         }
 
-    });    // ============================
+    });    // ==========================
     // BOT READY
-    // ============================
+    // ==========================
 
-    console.log(`${config.BOT_NAME} is now listening for messages...`);
+    console.log(`🚀 ${config.BOT_NAME} is now listening for messages...`);
 
 } // End of startBot()
 
-// ============================
+// ==========================
 // START BOT
-// ============================
+// ==========================
 
-startBot().catch(err => {
-    console.error("Failed to start bot:", err);
+startBot().catch((err) => {
+    console.error("❌ Failed to start bot:", err);
 
-    // Retry after 5 seconds if startup fails
+    // Retry after 5 seconds
     setTimeout(() => {
         startBot();
     }, 5000);
+});
+
+// ==========================
+// UNCAUGHT ERROR HANDLERS
+// ==========================
+
+process.on("uncaughtException", (err) => {
+    console.error("Uncaught Exception:", err);
+});
+
+process.on("unhandledRejection", (reason) => {
+    console.error("Unhandled Rejection:", reason);
 });
