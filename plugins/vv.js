@@ -1,80 +1,58 @@
-const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
+const { getViewOnce } = require("../lib/viewOnceStore");
 
 module.exports = {
     name: "vv",
-    description: "Reveal View Once media",
+    description: "Reveal cached View Once media",
 
     async execute({ sock, from, msg }) {
 
-        const quoted =
-            msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        const quoted = msg.message?.extendedTextMessage?.contextInfo;
 
-        if (!quoted) {
+        if (!quoted?.stanzaId) {
             return await sock.sendMessage(from, {
-                text: "❌ Reply to a View Once image or video."
+                text: "❌ Reply to a View Once image or video with *.vv*"
             });
         }
 
-        const viewOnce =
-            quoted.viewOnceMessage?.message ||
-            quoted.viewOnceMessageV2?.message;
+        const media = getViewOnce(quoted.stanzaId);
 
-        if (!viewOnce) {
+        if (!media) {
             return await sock.sendMessage(from, {
-                text: "❌ That message is not View Once."
+                text:
+`❌ View Once media not found.
+
+Possible reasons:
+• The media was sent before the bot was online.
+• The cache expired.
+• The bot couldn't save the media.`
             });
         }
 
-        let media;
-        let type;
-
-        if (viewOnce.imageMessage) {
-            media = viewOnce.imageMessage;
-            type = "image";
-        } else if (viewOnce.videoMessage) {
-            media = viewOnce.videoMessage;
-            type = "video";
-        } else {
-            return await sock.sendMessage(from, {
-                text: "❌ Unsupported View Once media."
-            });
-        }
-
-        try {
-
-            const stream = await downloadContentFromMessage(media, type);
-
-            let buffer = Buffer.from([]);
-
-            for await (const chunk of stream) {
-                buffer = Buffer.concat([buffer, chunk]);
-            }
-
-            if (type === "image") {
-
-                await sock.sendMessage(from, {
-                    image: buffer,
-                    caption: "👁️ View Once successfully revealed."
-                });
-
-            } else {
-
-                await sock.sendMessage(from, {
-                    video: buffer,
-                    caption: "👁️ View Once successfully revealed."
-                });
-
-            }
-
-        } catch (err) {
-
-            console.log(err);
+        if (media.type === "image") {
 
             await sock.sendMessage(from, {
-                text: "❌ Failed to reveal the View Once media."
+                image: media.buffer,
+                caption:
+`👁️ *VIEW ONCE OPENED*
+
+👤 Sender: ${media.sender}
+
+${media.caption || ""}`
+            });
+
+        } else {
+
+            await sock.sendMessage(from, {
+                video: media.buffer,
+                caption:
+`👁️ *VIEW ONCE OPENED*
+
+👤 Sender: ${media.sender}
+
+${media.caption || ""}`
             });
 
         }
 
     }
-              };
+};
